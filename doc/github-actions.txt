@@ -1,18 +1,32 @@
 ==============================================================================
 ------------------------------------------------------------------------------
-                                                        *GithubActions.toggle()*
-                            `GithubActions.toggle`()
-Toggle the plugin by calling the `enable`/`disable` methods respectively.
+*github-actions* GitHub Actions at your fingertips
+
+Browse the GitHub Actions runs of the current branch in a Telescope picker,
+view their logs, watch them live, or open them in the browser.
+
+Requirements:
+- GitHub CLI (`gh`), installed and authenticated.
+- telescope.nvim and plenary.nvim.
+
+Commands:
+- `:GithubActionsStatus` opens the picker for the current branch.
+
+Picker keys:
+- `<CR>`, `<C-l>` view the run logs in a terminal.
+- `<C-a>` watch the run live.
+- `<C-b>` open the run in the browser.
 
 ------------------------------------------------------------------------------
-                                                        *GithubActions.enable()*
-                        `GithubActions.enable`({scope})
-Initializes the plugin, sets event listeners and internal state.
+                                                         *GithubActions.setup()*
+                         `GithubActions.setup`({opts})
+Set up the plugin and merge the user options with the defaults.
 
-------------------------------------------------------------------------------
-                                                       *GithubActions.disable()*
-                           `GithubActions.disable`()
-Disables the plugin, clear highlight groups and autocmds, closes side buffers and resets the internal state.
+Parameters ~
+{opts} `(table|nil)` See |GithubActions.options|.
+
+Usage ~
+`require("github-actions").setup()` (add `{}` with your |GithubActions.options| table)
 
 ------------------------------------------------------------------------------
                                                 *GithubActions.show_ci_status()*
@@ -45,67 +59,6 @@ Parameters ~
 
 ==============================================================================
 ------------------------------------------------------------------------------
-Class ~
-{GitHubRun}
-Fields ~
-{status} "`(completed)`"|"in_progress"|"queued"|"waiting"
-{conclusion} `(("success"|"failure"|"cancelled"|"skipped"|"timed_out"|"action_required"|"neutral"|"stale")|nil)`
-{name} `(string)`
-{displayTitle} `(string|nil)`
-{createdAt} `(string)`
-{databaseId} `(number)`
-{headBranch} `(string)`
-{event} `(string)`
-{workflowName} `(string)`
-
-------------------------------------------------------------------------------
-                                                      *api.get_current_branch()*
-                           `api.get_current_branch`()
-current git branch
-Return ~
-`(string|nil)` branch The current git branch, or nil if not in a git repository
-
-------------------------------------------------------------------------------
-                                                        *api.fetch_runs_async()*
-      `api.fetch_runs_async`({branch}, {limit}, {on_success}, {on_error})
-GitHub CI/CD run items asynchronously
-Parameters ~
-{branch} `(string)` The branch to fetch runs for
-{limit} `(number)` Maximum number of runs to fetch
-{on_success} `(function)`(runs: GitHubRun[]) Callback for successful fetch
-{on_error} `(function)`(error: string) Callback for errors
-
-------------------------------------------------------------------------------
-                                                                *api.view_run()*
-                            `api.view_run`({run_id})
-a specific run by ID
-Parameters ~
-{run_id} `(number)` The run ID to view
-
-------------------------------------------------------------------------------
-                                                               *api.watch_run()*
-                           `api.watch_run`({run_id})
-a specific run by ID
-Parameters ~
-{run_id} `(number)` The run ID to watch
-
-------------------------------------------------------------------------------
-                                                           *api.view_run_logs()*
-                         `api.view_run_logs`({run_id})
-run logs in terminal
-Parameters ~
-{run_id} `(number)` The run ID to view logs for
-
-------------------------------------------------------------------------------
-                                                        *api.open_run_browser()*
-                        `api.open_run_browser`({run_id})
-a specific run in browser
-Parameters ~
-{run_id} `(number)` The run ID to open
-
-
-==============================================================================
-------------------------------------------------------------------------------
                                                          *GithubActions.options*
                             `GithubActions.options`
 GithubActions configuration with its default values.
@@ -115,95 +68,14 @@ Type ~
 Default values:
 >lua
   GithubActions.options = {
-      -- Prints useful logs about what event are triggered, and reasons actions are executed.
+      -- Show debug messages about what the plugin is doing.
       debug = false,
-      -- UI method to use for displaying CI status (currently only "telescope" is supported)
+      -- UI used to display CI status (only "telescope" is supported for now).
       ui_method = "telescope",
-      -- Maximum number of runs to fetch from GitHub Actions
+      -- Maximum number of runs to fetch from GitHub Actions.
       telescope_limit = 20,
   }
 
 <
-------------------------------------------------------------------------------
-                                                         *GithubActions.setup()*
-                        `GithubActions.setup`({options})
-Define your github-actions setup.
-
-Parameters ~
-{options} `(table)` Module config table. See |GithubActions.options|.
-
-Usage ~
-`require("github-actions").setup()` (add `{}` with your |GithubActions.options| table)
-
-
-==============================================================================
-------------------------------------------------------------------------------
-                                                           *ui.show_ci_status()*
-                          `ui.show_ci_status`({opts})
-GitHub Actions CI status using configured UI method
-Parameters ~
-{opts} `(optional)` `(table)` Options to pass to the UI
-
-
-==============================================================================
-------------------------------------------------------------------------------
-Class ~
-{RunStatusInfo}
-Fields ~
-{icon} `(string)`
-{text} `(string)`
-{highlight} `(string)`
-
-------------------------------------------------------------------------------
-                                                             *get_status_info()*
-                            `get_status_info`({run})
-formatted status information for a run
-Parameters ~
-{run} `(GitHubRun)`
-Return ~
-`(RunStatusInfo)`
-
-------------------------------------------------------------------------------
-                                                            *create_displayer()*
-                              `create_displayer`()
-a telescope entry display formatter
-Return ~
-`(table)` displayer Telescope entry display formatter
-
-------------------------------------------------------------------------------
-                                                          *create_entry_maker()*
-                       `create_entry_maker`({displayer})
-entry maker for telescope picker
-Parameters ~
-{displayer} `(table)` The display formatter
-Return ~
-`(function)` entry_maker Function that creates telescope entries
-
-------------------------------------------------------------------------------
-                                                            *create_previewer()*
-                          `create_previewer`({branch})
-telescope previewer for run details
-Parameters ~
-{branch} `(string)` Current branch name
-Return ~
-`(table)` previewer Telescope previewer
-
-------------------------------------------------------------------------------
-                                                              *setup_mappings()*
-                    `setup_mappings`({prompt_bufnr}, {map})
-telescope picker mappings
-Parameters ~
-{prompt_bufnr} `(number)` Telescope prompt buffer number
-{map} `(function)` Telescope map function
-Return ~
-`(boolean)`
-
-------------------------------------------------------------------------------
-                                                    *telescope.show_ci_status()*
-                       `telescope.show_ci_status`({opts})
-CI status in Telescope picker
-Parameters ~
-{opts} `(optional)` `(table)` Telescope options
-
 
  vim:tw=78:ts=8:noet:ft=help:norl:

@@ -1,281 +1,248 @@
 local api = require("github-actions.api")
+local config = require("github-actions.config")
 local log = require("github-actions.util.log")
+local status = require("github-actions.ui.status")
 
 local telescope = {}
 
----@class RunStatusInfo
----@field icon string
----@field text string
+-- A row shown in place of runs: loading, error, or no runs.
+---@class MessageRow
+---@field message string Label for the status column.
 ---@field highlight string
+---@field detail string One-line text for the title column.
+---@field preview string Text for the preview window.
 
----Get formatted status information for a run
----@param run GitHubRun
----@return RunStatusInfo
-local function get_status_info(run)
-  local status_icon = "●"
-  local status_text = run.status
-  local highlight = "Normal"
-
-  if run.status == "completed" then
-    if run.conclusion == "success" then
-      status_icon = "✓"
-      status_text = "✓ success"
-      highlight = "DiagnosticOk"
-    elseif run.conclusion == "failure" then
-      status_icon = "✗"
-      status_text = "✗ failure"
-      highlight = "DiagnosticError"
-    elseif run.conclusion == "cancelled" then
-      status_icon = "○"
-      status_text = "○ cancelled"
-      highlight = "DiagnosticWarn"
-    else
-      status_icon = "○"
-      status_text = "○ " .. (run.conclusion or "completed")
-      highlight = "DiagnosticInfo"
-    end
-  elseif run.status == "in_progress" then
-    status_icon = "⟳"
-    status_text = "⟳ running"
-    highlight = "DiagnosticWarn"
-  elseif run.status == "queued" then
-    status_icon = "⋯"
-    status_text = "⋯ queued"
-    highlight = "DiagnosticInfo"
-  end
-
-  return {
-    icon = status_icon,
-    text = status_text,
-    highlight = highlight,
-  }
-end
-
----Create a telescope entry display formatter
----@return table displayer Telescope entry display formatter
-local function create_displayer()
-  local entry_display = require("telescope.pickers.entry_display")
-  return entry_display.create({
-    separator = " ",
-    items = {
-      { width = 12 }, -- status with icon
-      { width = 30 }, -- workflow name
-      { remaining = true }, -- title
-    },
-  })
-end
-
----Create entry maker for telescope picker
----@param displayer table The display formatter
----@return function entry_maker Function that creates telescope entries
-local function create_entry_maker(displayer)
-  return function(entry)
-    -- Handle loading state
-    if entry.is_loading then
-      return {
-        value = entry,
-        ordinal = "loading",
-        display = function()
-          return displayer({
-            { "⟳ Loading...", "DiagnosticWarn" },
-            { "", "" },
-            { "", "" },
-          })
-        end,
-      }
-    end
-
-    -- Handle error state
-    if entry.is_error then
-      return {
-        value = entry,
-        ordinal = "error",
-        display = function()
-          return displayer({
-            { "✗ Error", "DiagnosticError" },
-            { "Failed to fetch runs", "DiagnosticError" },
-            { "", "" },
-          })
-        end,
-      }
-    end
-
-    -- Handle actual run entries
-    local status_info = get_status_info(entry.value)
+--- Create a placeholder row.
+---
+---@param message string
+---@param highlight string
+---@param preview string
+---@return MessageRow
+---@private
+local function message_row(message, highlight, preview)
     return {
-      value = entry.value,
-      ordinal = entry.value.name .. " " .. (entry.value.displayTitle or "") .. " " .. entry.value.status,
-      display = function(tbl)
-        return displayer({
-          { status_info.text, status_info.highlight },
-          { tbl.value.name, "TelescopeResultsIdentifier" },
-          { tbl.value.displayTitle or "", "TelescopeResultsComment" },
-        })
-      end,
-      status_info = status_info,
+        message = message,
+        highlight = highlight,
+        detail = (preview:gsub("%s*\n%s*", " ")),
+        preview = preview,
     }
-  end
 end
 
----Create telescope previewer for run details
----@param branch string Current branch name
----@return table previewer Telescope previewer
-local function create_previewer(branch)
-  local previewers = require("telescope.previewers")
-  return previewers.new_buffer_previewer({
-    title = "Run Details",
-    define_preview = function(self, entry)
-      -- Handle loading state
-      if entry.value and entry.value.is_loading then
-        vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, { "Loading GitHub CI runs..." })
-        return
-      end
+--- Create the entry display formatter.
+---
+---@return function
+---@private
+local function create_displayer()
+    return require("telescope.pickers.entry_display").create({
+        separator = " ",
+        items = {
+            { width = 12 }, -- status with icon
+            { width = 30 }, -- workflow name
+            { remaining = true }, -- title
+        },
+    })
+end
 
-      ---@type GitHubRun
-      local run = entry.value
-      local status_info = get_status_info(run)
+--- Create the entry maker for runs and placeholder rows.
+---
+---@param displayer function
+---@return function
+---@private
+local function create_entry_maker(displayer)
+    return function(item)
+        if item.message then
+            return {
+                value = item,
+                ordinal = item.message .. " " .. item.detail,
+                display = function()
+                    return displayer({
+                        { item.message, item.highlight },
+                        "",
+                        { item.detail, item.highlight },
+                    })
+                end,
+            }
+        end
 
-      local lines = {
-        "Workflow: " .. run.name,
-        "Title: " .. (run.displayTitle or "N/A"),
-        "Branch: " .. (run.headBranch or branch),
-        "Event: " .. (run.event or "N/A"),
+        ---@type GitHubRun
+        local run = item
+        local info = status.get(run)
+        local name = status.non_empty(run.name) or ""
+        local title = status.non_empty(run.displayTitle) or ""
+
+        return {
+            value = run,
+            -- Include the status label so typing "failure" or "running" filters runs.
+            ordinal = table.concat({
+                info.text,
+                name,
+                title,
+                status.non_empty(run.event) or "",
+            }, " "),
+            display = function()
+                return displayer({
+                    { info.text, info.highlight },
+                    { name, "TelescopeResultsIdentifier" },
+                    { title, "TelescopeResultsComment" },
+                })
+            end,
+        }
+    end
+end
+
+--- Lines describing a run, for the preview window.
+---
+---@param run GitHubRun
+---@param branch string
+---@return string[]
+---@private
+local function run_details(run, branch)
+    local function field(value)
+        return status.non_empty(value) or "N/A"
+    end
+
+    return {
+        "Workflow: " .. field(run.name),
+        "Title: " .. field(run.displayTitle),
+        "Branch: " .. (status.non_empty(run.headBranch) or branch),
+        "Event: " .. field(run.event),
         "",
-        "Status: " .. status_info.text,
-        "Conclusion: " .. (run.conclusion or "pending"),
+        "Status: " .. status.get(run).text,
+        "Conclusion: " .. (status.non_empty(run.conclusion) or "pending"),
         "",
-        "Run ID: " .. run.databaseId,
-        "Created: " .. (run.createdAt or "N/A"),
+        "Run ID: " .. tostring(run.databaseId),
+        "Created: " .. field(run.createdAt),
         "",
         "Actions:",
         "  <CR>  - View logs",
-        "  <C-w> - Watch run",
+        "  <C-a> - Watch run",
         "  <C-b> - Open in browser",
-      }
-      vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, lines)
-    end,
-  })
+    }
 end
 
----Setup telescope picker mappings
----@param prompt_bufnr number Telescope prompt buffer number
----@param map function Telescope map function
----@return boolean
-local function setup_mappings(prompt_bufnr, map)
-  local actions = require("telescope.actions")
-  local action_state = require("telescope.actions.state")
-
-  actions.select_default:replace(function()
-    local selection = action_state.get_selected_entry()
-    if selection.value.is_loading then
-      return
-    end
-    actions.close(prompt_bufnr)
-    api.view_run_logs(selection.value.databaseId)
-  end)
-
-  map("i", "<C-w>", function()
-    local selection = action_state.get_selected_entry()
-    if selection.value.is_loading then
-      return
-    end
-    actions.close(prompt_bufnr)
-    api.watch_run(selection.value.databaseId)
-  end)
-
-  map("i", "<C-b>", function()
-    local selection = action_state.get_selected_entry()
-    if selection.value.is_loading then
-      return
-    end
-    actions.close(prompt_bufnr)
-    api.open_run_browser(selection.value.databaseId)
-  end)
-
-  map("i", "<C-l>", function()
-    local selection = action_state.get_selected_entry()
-    if selection.value.is_loading then
-      return
-    end
-    actions.close(prompt_bufnr)
-    api.view_run_logs(selection.value.databaseId)
-  end)
-
-  return true
+--- Create the previewer for run details.
+---
+---@param branch string
+---@return table
+---@private
+local function create_previewer(branch)
+    return require("telescope.previewers").new_buffer_previewer({
+        title = "Run Details",
+        define_preview = function(self, entry)
+            local item = entry.value
+            local lines = item.message and vim.split(item.preview, "\n")
+                or run_details(item, branch)
+            vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, lines)
+        end,
+    })
 end
 
----Show CI status in Telescope picker
----@param opts? table Telescope options
+--- Create the picker key mappings.
+---
+---@param cwd string Directory to run gh in.
+---@return function attach_mappings
+---@private
+local function create_mappings(cwd)
+    return function(prompt_bufnr, map)
+        local actions = require("telescope.actions")
+        local action_state = require("telescope.actions.state")
+
+        -- Wrap an api function so it runs on the selected run, if there is one.
+        local function on_run(fn)
+            return function()
+                local entry = action_state.get_selected_entry()
+                if not entry or entry.value.message then
+                    return
+                end
+
+                actions.close(prompt_bufnr)
+                fn(entry.value.databaseId, cwd)
+            end
+        end
+
+        actions.select_default:replace(on_run(api.view_run_logs))
+
+        for _, mode in ipairs({ "i", "n" }) do
+            map(mode, "<C-l>", on_run(api.view_run_logs))
+            map(mode, "<C-a>", on_run(api.watch_run))
+            map(mode, "<C-b>", on_run(api.open_run_browser))
+        end
+
+        return true
+    end
+end
+
+--- Show CI status in a Telescope picker.
+---
+---@param opts? table Telescope options, plus `limit`.
+---@private
 function telescope.show_ci_status(opts)
-  opts = opts or {}
+    opts = opts or {}
 
-  -- Check dependencies
-  local ok, pickers = pcall(require, "telescope.pickers")
-  if not ok then
-    vim.notify("telescope.nvim is required but not installed", vim.log.levels.ERROR)
-    log.debug("telescope.show_ci_status", "telescope.nvim not found")
-    return
-  end
+    local ok, pickers = pcall(require, "telescope.pickers")
+    if not ok then
+        vim.notify("telescope.nvim is required but not installed", vim.log.levels.ERROR)
+        return
+    end
 
-  local finders = require("telescope.finders")
-  local conf = require("telescope.config").values
+    local finders = require("telescope.finders")
+    local conf = require("telescope.config").values
 
-  -- Get config
-  local config = _G.GithubActions.config or {}
-  local limit = opts.limit or config.telescope_limit or 20
+    local limit = opts.limit or config.options.telescope_limit
+    local cwd = api.get_cwd()
 
-  -- Get current branch
-  local branch = api.get_current_branch()
-  if not branch then
-    vim.notify("Not in a git repository", vim.log.levels.ERROR)
-    log.debug("telescope.show_ci_status", "Not in a git repository")
-    return
-  end
+    local branch, err = api.get_current_branch(cwd)
+    if not branch then
+        vim.notify(err, vim.log.levels.ERROR)
+        return
+    end
 
-  log.debug("telescope.show_ci_status", string.format("Opening picker for branch: %s", branch))
+    log.debug("telescope.show_ci_status", "Opening picker for branch: " .. branch)
 
-  -- Setup display components
-  local displayer = create_displayer()
-  local entry_maker = create_entry_maker(displayer)
+    local entry_maker = create_entry_maker(create_displayer())
 
-  -- Create picker with loading state
-  local picker = pickers.new(opts, {
-    prompt_title = "GitHub CI/CD Status - " .. branch,
-    finder = finders.new_table({
-      results = { { is_loading = true } },
-      entry_maker = entry_maker,
-    }),
-    sorter = conf.generic_sorter(opts),
-    previewer = create_previewer(branch),
-    attach_mappings = setup_mappings,
-  })
+    local function finder(results)
+        return finders.new_table({ results = results, entry_maker = entry_maker })
+    end
 
-  -- Open picker immediately
-  picker:find()
+    local picker = pickers.new(opts, {
+        prompt_title = "GitHub CI/CD Status - " .. branch,
+        finder = finder({
+            message_row("⟳ Loading...", "DiagnosticWarn", "Loading GitHub Actions runs..."),
+        }),
+        sorter = conf.generic_sorter(opts),
+        previewer = create_previewer(branch),
+        attach_mappings = create_mappings(cwd),
+    })
 
-  -- Fetch data asynchronously and update picker
-  api.fetch_runs_async(branch, limit, function(runs)
-    local entries = vim.tbl_map(function(run)
-      return { value = run }
-    end, runs)
+    picker:find()
 
-    picker:refresh(
-      finders.new_table({
-        results = entries,
-        entry_maker = entry_maker,
-      }),
-      opts
-    )
-  end, function(error_msg)
-    vim.notify("Error fetching CI status: " .. error_msg, vim.log.levels.ERROR)
-    picker:refresh(
-      finders.new_table({
-        results = { { is_error = true, message = error_msg } },
-        entry_maker = entry_maker,
-      }),
-      opts
-    )
-  end)
+    -- The picker may be closed before the runs arrive.
+    local function is_open()
+        return picker.prompt_bufnr ~= nil and vim.api.nvim_buf_is_valid(picker.prompt_bufnr)
+    end
+
+    api.fetch_runs_async({ branch = branch, limit = limit, cwd = cwd }, function(runs)
+        if not is_open() then
+            return
+        end
+
+        if #runs == 0 then
+            picker:refresh(finder({
+                message_row("○ No runs", "DiagnosticInfo", "No runs found for branch " .. branch),
+            }))
+            return
+        end
+
+        picker:refresh(finder(runs))
+    end, function(fetch_err)
+        if not is_open() then
+            vim.notify("Error fetching CI status: " .. fetch_err, vim.log.levels.ERROR)
+            return
+        end
+
+        picker:refresh(finder({ message_row("✗ Error", "DiagnosticError", fetch_err) }))
+    end)
 end
 
 return telescope

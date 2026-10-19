@@ -1,42 +1,38 @@
-local main = require("github-actions.main")
-local config = require("github-actions.config")
-local ui = require("github-actions.ui")
+--- *github-actions* GitHub Actions at your fingertips
+---
+--- Browse the GitHub Actions runs of the current branch in a Telescope picker,
+--- view their logs, watch them live, or open them in the browser.
+---
+--- Requirements:
+--- - GitHub CLI (`gh`), installed and authenticated.
+--- - telescope.nvim and plenary.nvim.
+---
+--- Commands:
+--- - `:GithubActionsStatus` opens the picker for the current branch.
+---
+--- Picker keys:
+--- - `<CR>`, `<C-l>` view the run logs in a terminal.
+--- - `<C-a>` watch the run live.
+--- - `<C-b>` open the run in the browser.
+
 local api = require("github-actions.api")
+local config = require("github-actions.config")
 
 local GithubActions = {}
 
---- Toggle the plugin by calling the `enable`/`disable` methods respectively.
-function GithubActions.toggle()
-    if _G.GithubActions.config == nil then
-        _G.GithubActions.config = config.options
-    end
-
-    main.toggle("public_api_toggle")
-end
-
---- Initializes the plugin, sets event listeners and internal state.
-function GithubActions.enable(scope)
-    if _G.GithubActions.config == nil then
-        _G.GithubActions.config = config.options
-    end
-
-    main.toggle(scope or "public_api_enable")
-end
-
---- Disables the plugin, clear highlight groups and autocmds, closes side buffers and resets the internal state.
-function GithubActions.disable()
-    main.toggle("public_api_disable")
-end
-
--- setup GithubActions options and merge them with user provided ones.
+--- Set up the plugin and merge the user options with the defaults.
+---
+---@param opts table|nil See |GithubActions.options|.
+---
+---@usage `require("github-actions").setup()` (add `{}` with your |GithubActions.options| table)
 function GithubActions.setup(opts)
-    _G.GithubActions.config = config.setup(opts)
+    config.setup(opts)
 end
 
 --- Show GitHub Actions CI status in a picker
 ---@param opts? table Options to pass to the UI (e.g., { limit = 30 })
 function GithubActions.show_ci_status(opts)
-    ui.show_ci_status(opts)
+    require("github-actions.ui").show_ci_status(opts)
 end
 
 --- View a specific GitHub Actions run
@@ -57,6 +53,4 @@ function GithubActions.open_run_browser(run_id)
     api.open_run_browser(run_id)
 end
 
-_G.GithubActions = GithubActions
-
-return _G.GithubActions
+return GithubActions

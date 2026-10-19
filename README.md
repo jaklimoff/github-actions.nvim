@@ -1,5 +1,5 @@
 <p align="center">
-  <h1 align="center">jaklimoff/github-actions.nvim</h2>
+  <h1 align="center">jaklimoff/github-actions.nvim</h1>
 </p>
 
 <p align="center">
@@ -11,7 +11,7 @@
 ## ⚡️ Features
 
 - 🔍 **Browse GitHub Actions runs** directly from Neovim
-- 📊 **Real-time status updates** for CI/CD workflows
+- 📊 **Live run watching** via `gh run watch`
 - 🎯 **Telescope integration** for beautiful, interactive UI
 - ⚡ **Async operations** - non-blocking run fetching
 - 🔎 **Run previews** with detailed information
@@ -23,7 +23,7 @@
 
 ### Prerequisites
 
-- Neovim >= 0.7.0
+- Neovim >= 0.9.0
 - [GitHub CLI (`gh`)](https://cli.github.com/) - must be installed and authenticated
 - [telescope.nvim](https://github.com/nvim-telescope/telescope.nvim) - for the picker UI
 - [plenary.nvim](https://github.com/nvim-lua/plenary.nvim) - for async operations
@@ -95,6 +95,9 @@ Plug 'jaklimoff/github-actions.nvim'
 
 4. Run `:GithubActionsStatus` to see your CI/CD runs
 
+The picker shows runs for the current branch of the repository that holds the current file
+(or of the working directory, when the buffer is not a file).
+
 ### Basic Usage
 
 ```lua
@@ -113,7 +116,7 @@ require("github-actions").show_ci_status({ limit = 30 })
 | Key | Action |
 |-----|--------|
 | `<CR>` | View run logs in terminal |
-| `<C-w>` | Watch run (live updates) |
+| `<C-a>` | Watch run (live updates) |
 | `<C-b>` | Open run in browser |
 | `<C-l>` | View logs (alternative) |
 
@@ -122,7 +125,7 @@ require("github-actions").show_ci_status({ limit = 30 })
 <details>
 <summary>Click to unfold the full list of options with their default values</summary>
 
-> **Note**: The options are also available in Neovim by calling `:h github-actions.options`
+> **Note**: The options are also available in Neovim by calling `:h GithubActions.options`
 
 ```lua
 require("github-actions").setup({
@@ -168,7 +171,6 @@ require("github-actions").setup({
 | Command | Description |
 |---------|-------------|
 | `:GithubActionsStatus` | Open Telescope picker with CI/CD runs for current branch |
-| `:GithubActions` | Toggle the plugin |
 
 ## 🔌 API
 
@@ -186,11 +188,8 @@ gh.view_run(12345)
 gh.watch_run(12345)
 gh.open_run_browser(12345)
 
--- Plugin lifecycle
+-- Configuration
 gh.setup(opts)
-gh.enable()
-gh.disable()
-gh.toggle()
 ```
 
 ## ⌨ Contributing

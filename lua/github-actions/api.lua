@@ -2,8 +2,8 @@ local log = require("github-actions.util.log")
 
 local api = {}
 
----@alias RunStatus "completed"|"in_progress"|"queued"|"waiting"
----@alias RunConclusion "success"|"failure"|"cancelled"|"skipped"|"timed_out"|"action_required"|"neutral"|"stale"
+---@alias RunStatus "completed"|"in_progress"|"queued"|"waiting"|"requested"|"pending"
+---@alias RunConclusion "success"|"failure"|"cancelled"|"skipped"|"timed_out"|"action_required"|"neutral"|"stale"|"startup_failure"|""
 
 ---@class GitHubRun
 ---@field status RunStatus
@@ -16,107 +16,180 @@ local api = {}
 ---@field event string
 ---@field workflowName string
 
----Get current git branch
----@return string|nil branch The current git branch, or nil if not in a git repository
-function api.get_current_branch()
-  local handle = io.popen("git branch --show-current 2>/dev/null")
-  if not handle then
-    log.debug("api.get_current_branch", "Failed to execute git command")
-    return nil
-  end
+local RUN_FIELDS =
+    "status,conclusion,name,displayTitle,createdAt,databaseId,headBranch,event,workflowName"
 
-  local result = handle:read("*a")
-  handle:close()
-
-  if result then
-    result = result:gsub("\n", "")
-    if result ~= "" then
-      return result
+--- Directory to run git and gh in: the current file's folder, or the working directory.
+---
+---@return string
+---@private
+function api.get_cwd()
+    local name = vim.api.nvim_buf_get_name(0)
+    if vim.bo.buftype == "" and name ~= "" then
+        local dir = vim.fn.fnamemodify(name, ":p:h")
+        if vim.fn.isdirectory(dir) == 1 then
+            return dir
+        end
     end
-  end
 
-  return nil
+    return vim.fn.getcwd()
 end
 
----Fetch GitHub CI/CD run items asynchronously
----@param branch string The branch to fetch runs for
----@param limit number Maximum number of runs to fetch
----@param on_success function(runs: GitHubRun[]) Callback for successful fetch
----@param on_error function(error: string) Callback for errors
-function api.fetch_runs_async(branch, limit, on_success, on_error)
-  local ok, Job = pcall(require, "plenary.job")
-  if not ok then
-    local error_msg = "plenary.nvim is required but not installed"
-    log.debug("api.fetch_runs_async", error_msg)
-    on_error(error_msg)
-    return
-  end
+--- Get the current git branch.
+---
+---@param cwd string|nil Directory inside the repository. Defaults to |api.get_cwd()|.
+---@return string|nil branch The current branch, or nil on failure.
+---@return string|nil err Why there is no branch.
+---@private
+function api.get_current_branch(cwd)
+    local lines =
+        vim.fn.systemlist({ "git", "-C", cwd or api.get_cwd(), "branch", "--show-current" })
+    if vim.v.shell_error ~= 0 then
+        log.debug("api.get_current_branch", "git failed: " .. table.concat(lines, " "))
+        return nil, "Not in a git repository"
+    end
 
-  log.debug("api.fetch_runs_async", string.format("Fetching runs for branch: %s, limit: %d", branch, limit))
+    local branch = lines[1]
+    if not branch or branch == "" then
+        return nil, "Detached HEAD: check out a branch to see its runs"
+    end
 
-  Job:new({
-    command = "gh",
-    args = {
-      "run",
-      "list",
-      "--branch",
-      branch,
-      "--limit",
-      tostring(limit),
-      "--json",
-      "status,conclusion,name,displayTitle,createdAt,databaseId,headBranch,event,workflowName",
-    },
-    on_exit = vim.schedule_wrap(function(job, return_code)
-      if return_code ~= 0 then
-        local error_msg = table.concat(job:stderr_result(), "\n")
-        log.debug("api.fetch_runs_async", string.format("Failed to fetch runs: %s", error_msg))
-        on_error(error_msg)
+    return branch
+end
+
+--- Fetch GitHub Actions runs asynchronously.
+---
+---@param opts { branch: string, limit: number, cwd: string|nil }
+---@param on_success fun(runs: GitHubRun[]) Called with the runs (possibly empty).
+---@param on_error fun(err: string) Called with an error message.
+---@private
+function api.fetch_runs_async(opts, on_success, on_error)
+    local ok, Job = pcall(require, "plenary.job")
+    if not ok then
+        on_error("plenary.nvim is required but not installed")
         return
-      end
+    end
 
-      local output = table.concat(job:result(), "\n")
-      local decode_ok, runs = pcall(vim.json.decode, output)
-
-      if not decode_ok or not runs or #runs == 0 then
-        local error_msg = "No CI runs found"
-        log.debug("api.fetch_runs_async", error_msg)
-        on_error(error_msg)
+    if vim.fn.executable("gh") == 0 then
+        on_error("GitHub CLI (gh) was not found in PATH")
         return
-      end
+    end
 
-      log.debug("api.fetch_runs_async", string.format("Successfully fetched %d runs", #runs))
-      on_success(runs)
-    end),
-  }):start()
+    log.debug(
+        "api.fetch_runs_async",
+        string.format("Fetching runs for branch: %s, limit: %d", opts.branch, opts.limit)
+    )
+
+    Job
+        :new({
+            command = "gh",
+            args = {
+                "run",
+                "list",
+                "--branch",
+                opts.branch,
+                "--limit",
+                tostring(opts.limit),
+                "--json",
+                RUN_FIELDS,
+            },
+            cwd = opts.cwd,
+            on_exit = vim.schedule_wrap(function(job, return_code)
+                if return_code ~= 0 then
+                    local err = vim.trim(table.concat(job:stderr_result(), "\n"))
+                    log.debug("api.fetch_runs_async", "Failed to fetch runs: " .. err)
+                    on_error(err ~= "" and err or "gh exited with code " .. return_code)
+                    return
+                end
+
+                local decode_ok, runs = pcall(vim.json.decode, table.concat(job:result(), "\n"))
+                if not decode_ok or type(runs) ~= "table" then
+                    log.debug("api.fetch_runs_async", "Could not parse gh output")
+                    on_error("Could not parse the output of `gh run list`")
+                    return
+                end
+
+                log.debug("api.fetch_runs_async", string.format("Fetched %d runs", #runs))
+                on_success(runs)
+            end),
+        })
+        :start()
 end
 
----View a specific run by ID
----@param run_id number The run ID to view
-function api.view_run(run_id)
-  log.debug("api.view_run", string.format("Opening run %d", run_id))
-  vim.cmd(string.format("terminal gh run view %s", run_id))
+--- Run a command in a terminal buffer in the current window.
+---
+---@param cmd string[]
+---@param cwd string|nil
+---@private
+local function open_terminal(cmd, cwd)
+    local buf = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_win_set_buf(0, buf)
+
+    if vim.fn.has("nvim-0.11") == 1 then
+        vim.fn.jobstart(cmd, { term = true, cwd = cwd })
+    else
+        vim.fn.termopen(cmd, { cwd = cwd })
+    end
 end
 
----Watch a specific run by ID
----@param run_id number The run ID to watch
-function api.watch_run(run_id)
-  log.debug("api.watch_run", string.format("Watching run %d", run_id))
-  vim.cmd(string.format("terminal gh run watch %s", run_id))
+--- View a specific run by ID.
+---
+---@param run_id number The run ID to view.
+---@param cwd string|nil Directory to run gh in.
+---@private
+function api.view_run(run_id, cwd)
+    log.debug("api.view_run", "Opening run " .. run_id)
+    open_terminal({ "gh", "run", "view", tostring(run_id) }, cwd)
 end
 
----View run logs in terminal
----@param run_id number The run ID to view logs for
-function api.view_run_logs(run_id)
-  log.debug("api.view_run_logs", string.format("Opening logs for run %d", run_id))
-  vim.cmd(string.format("terminal gh run view %s --log", run_id))
+--- Watch a specific run by ID.
+---
+---@param run_id number The run ID to watch.
+---@param cwd string|nil Directory to run gh in.
+---@private
+function api.watch_run(run_id, cwd)
+    log.debug("api.watch_run", "Watching run " .. run_id)
+    open_terminal({ "gh", "run", "watch", tostring(run_id) }, cwd)
 end
 
----Open a specific run in browser
----@param run_id number The run ID to open
-function api.open_run_browser(run_id)
-  log.debug("api.open_run_browser", string.format("Opening run %d in browser", run_id))
-  vim.fn.system(string.format("gh run view %s --web", run_id))
-  vim.notify("Opening run in browser...", vim.log.levels.INFO)
+--- View run logs in a terminal.
+---
+---@param run_id number The run ID to view logs for.
+---@param cwd string|nil Directory to run gh in.
+---@private
+function api.view_run_logs(run_id, cwd)
+    log.debug("api.view_run_logs", "Opening logs for run " .. run_id)
+    open_terminal({ "gh", "run", "view", tostring(run_id), "--log" }, cwd)
+end
+
+--- Open a specific run in the browser.
+---
+---@param run_id number The run ID to open.
+---@param cwd string|nil Directory to run gh in.
+---@private
+function api.open_run_browser(run_id, cwd)
+    log.debug("api.open_run_browser", "Opening run " .. run_id .. " in browser")
+
+    if vim.fn.executable("gh") == 0 then
+        vim.notify("GitHub CLI (gh) was not found in PATH", vim.log.levels.ERROR)
+        return
+    end
+
+    local stderr = ""
+    vim.fn.jobstart({ "gh", "run", "view", tostring(run_id), "--web" }, {
+        cwd = cwd,
+        stderr_buffered = true,
+        on_stderr = function(_, data)
+            stderr = vim.trim(table.concat(data or {}, "\n"))
+        end,
+        on_exit = function(_, code)
+            if code ~= 0 then
+                vim.notify("Could not open run in browser: " .. stderr, vim.log.levels.ERROR)
+            end
+        end,
+    })
+
+    vim.notify("Opening run in browser...", vim.log.levels.INFO)
 end
 
 return api
