@@ -20,10 +20,13 @@ test-0.9.5:
 	bob use 0.9.5
 	make test
 
+# pinned so docs generated locally match the CI check.
+MINI_VERSION := v0.18.0
+
 # installs `mini.nvim`, used for both the tests and documentation.
 deps:
 	@mkdir -p deps
-	git clone --depth 1 https://github.com/echasnovski/mini.nvim deps/mini.nvim
+	git clone --depth 1 --branch $(MINI_VERSION) https://github.com/echasnovski/mini.nvim deps/mini.nvim
 
 # installs deps before running tests, useful for the CI.
 test-ci: deps test
